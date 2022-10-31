@@ -15,6 +15,11 @@ limitations under the License.
 */
 
 import * as path from "path";
+
+import * as Sentry from '@sentry/node';
+import * as _ from '@sentry/tracing'; // Performing the import activates tracing.
+import { Healthz } from "./health/healthz";
+
 import {
     LogLevel,
     LogService,
@@ -23,8 +28,8 @@ import {
     RichConsoleLogger,
     SimpleFsStorageProvider
 } from "matrix-bot-sdk";
+
 import { read as configRead } from "./config";
-import { Healthz } from "./health/healthz";
 import { Mjolnir } from "./Mjolnir";
 import { patchMatrixClient } from "./utils";
 
@@ -39,6 +44,14 @@ import { patchMatrixClient } from "./utils";
 
     LogService.info("index", "Starting bot...");
 
+    if (config.health.sentry) {
+        // Configure error monitoring with Sentry.
+        let sentry = config.health.sentry;
+        Sentry.init({
+            dsn: sentry.dsn,
+            tracesSampleRate: sentry.tracesSampleRate,
+        });
+    }
     const healthz = new Healthz(config);
     healthz.isHealthy = false; // start off unhealthy
     if (config.health.healthz.enabled) {

@@ -36,6 +36,8 @@
     "typescript-formatter": "^7.2"
   },
   "dependencies": {
+    "@sentry/node": "^7.17.2",
+    "@sentry/tracing": "^7.17.2",
     "await-lock": "^2.2.2",
     "express": "^4.17",
     "html-to-text": "^8.0.0",
