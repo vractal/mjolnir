@@ -68,6 +68,7 @@ export interface IConfig {
         allowNoPrefix: boolean;
         additionalPrefixes: string[];
         confirmWildcardBan: boolean;
+        features: string[];
     };
     protections: {
         wordlist: {
@@ -136,6 +137,9 @@ const defaultConfig: IConfig = {
         allowNoPrefix: false,
         additionalPrefixes: [],
         confirmWildcardBan: true,
+        features: [
+            "synapse admin",
+        ]
     },
     protections: {
         wordlist: {
@@ -177,5 +181,6 @@ export function read(): IConfig {
     const content = fs.readFileSync(path.join(config_dir, config_file), "utf8");
     const parsed = load(content);
     const config = {...defaultConfig, ...(parsed as object)} as IConfig;
+    config.commands = {...defaultConfig.commands, ...config.commands};
     return config;
 }

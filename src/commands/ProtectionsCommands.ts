@@ -18,6 +18,8 @@ import { htmlEscape } from "../utils";
 import { Mjolnir } from "../Mjolnir";
 import { extractRequestError, LogService, RichReply } from "matrix-bot-sdk";
 import { isListSetting } from "../protections/ProtectionSettings";
+//import { defineApplicationCommand } from "./ApplicationCommand";
+//import { Protection } from "../protections/IProtection";
 
 // !mjolnir enable <protection>
 export async function execEnableProtection(roomId: string, event: any, mjolnir: Mjolnir, parts: string[]) {
@@ -39,6 +41,14 @@ enum ConfigAction {
     Add,
     Remove
 }
+
+/**
+ * This is an unusual command in that it does parsing from string itself
+ * Normally it is expected that all commands do the parsing into concrete mjolnir objects before this phase.
+ */
+//defineApplicationCommand([], (mjolnir: Mjolnir, protection: Protection, settingName: string, settingPath: string, stringValue: string) => {
+//    const defaultSettings = protection.settings;
+//})
 
 /*
  * Process a given ConfigAction against a given protection setting
