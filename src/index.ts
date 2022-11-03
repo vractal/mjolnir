@@ -16,8 +16,6 @@ limitations under the License.
 
 import * as path from "path";
 
-import * as Sentry from '@sentry/node';
-import * as _ from '@sentry/tracing'; // Performing the import activates tracing.
 import { Healthz } from "./health/healthz";
 
 import {
@@ -31,7 +29,7 @@ import {
 
 import { read as configRead } from "./config";
 import { Mjolnir } from "./Mjolnir";
-import { patchMatrixClient } from "./utils";
+import { initializeSentry, patchMatrixClient } from "./utils";
 
 
 (async function () {
@@ -44,13 +42,9 @@ import { patchMatrixClient } from "./utils";
 
     LogService.info("index", "Starting bot...");
 
+    // Initialize error reporting as early as possible.
     if (config.health.sentry) {
-        // Configure error monitoring with Sentry.
-        let sentry = config.health.sentry;
-        Sentry.init({
-            dsn: sentry.dsn,
-            tracesSampleRate: sentry.tracesSampleRate,
-        });
+        initializeSentry(config);
     }
     const healthz = new Healthz(config);
     healthz.isHealthy = false; // start off unhealthy
