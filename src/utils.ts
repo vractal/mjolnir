@@ -418,6 +418,7 @@ export function initializeSentry(config: IConfig) {
             dsn: sentry.dsn,
             tracesSampleRate: sentry.tracesSampleRate,
         });
+        sentryInitialized = true;
     }
 }
 // Set to `true` once we have initialized `Sentry` to ensure
