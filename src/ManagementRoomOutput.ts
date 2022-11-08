@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import * as Sentry from "@sentry/node";
+import { SeverityLevel } from "@sentry/node";
 import { extractRequestError, LogLevel, LogService, MatrixClient, MessageType, Permalinks, TextualMessageEventContent, UserID } from "matrix-bot-sdk";
 import { IConfig } from "./config";
 import { htmlEscape } from "./utils";
@@ -71,8 +72,7 @@ export default class ManagementRoomOutput {
                 alias = (await this.client.getPublishedAlias(roomId)) || roomId;
             } catch (e) {
                 // This is a recursive call, so tell the function not to try and call us
-                await this.logMessage(LogLevel.WARN, "utils", `Failed to resolve room alias for ${roomId} - see console for details`, null, true);
-                LogService.warn("utils", extractRequestError(e));
+                this.logError(LogLevel.WARN, "utils", e, `Failed to resolve room alias for ${roomId}`, true);
             }
             const regexRoomId = new RegExp(escapeRegex(roomId), "g");
             content.body = content.body.replace(regexRoomId, alias);
@@ -86,6 +86,32 @@ export default class ManagementRoomOutput {
     }
 
     /**
+     * Log an error message to the management room, console and Sentry.
+     */
+    public async logError(level: LogLevel, module: string, error: Error, context?: string, isRecursive = false) {
+        let sentryLevel: SeverityLevel | undefined;
+        if (level === LogLevel.DEBUG) {
+            sentryLevel = 'debug';
+        } else if (level === LogLevel.ERROR) {
+            sentryLevel = 'error';
+        } else if (level === LogLevel.INFO) {
+            sentryLevel = 'info';
+        } else if (level === LogLevel.WARN) {
+            sentryLevel = 'warning';
+        }
+        let scope = {
+            extra: {
+                module,
+                context
+            },
+            level: sentryLevel
+        };
+        Sentry.captureException(error, scope);
+        LogService.warn("utils", extractRequestError(error));
+        await this.logMessage(level, module, error.message, null, isRecursive);
+    }
+
+    /**
      * Log a message to the management room and the console, replaces any room ids in additionalRoomIds with pills.
      *
      * @param level Used to determine whether to hide the message or not depending on `config.verboseLogging`.
@@ -96,7 +122,6 @@ export default class ManagementRoomOutput {
      */
     public async logMessage(level: LogLevel, module: string, message: string | any, additionalRoomIds: string[] | string | null = null, isRecursive = false): Promise<any> {
         if (level === LogLevel.ERROR) {
-            // Propagate any error to Sentry, for sorting and monitoring.
             Sentry.captureMessage(`${module}: ${message}`, 'error');
         }
         if (!additionalRoomIds) additionalRoomIds = [];
