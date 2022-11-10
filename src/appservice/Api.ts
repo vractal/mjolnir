@@ -16,7 +16,12 @@ export class Api {
         private mjolnirManager: MjolnirManager,
     ) {}
 
-    private resolveAccessToken(accessToken: string): Promise<string> {
+    /**
+     * Resolves an open id access token to find a matching user that the token is valid for.
+     * @param accessToken An openID token.
+     * @returns The mxid of the user that this token belongs to or null if the token could not be authenticated.
+     */
+    private resolveAccessToken(accessToken: string): Promise<string|null> {
         return new Promise((resolve, reject) => {
             request({
                 url: `${this.homeserver}/_matrix/federation/v1/openid/userinfo`,
@@ -39,8 +44,8 @@ export class Api {
         });
     }
 
-    public async close() {
-        return await new Promise((resolve, reject) => {
+    public async close(): Promise<void> {
+        await new Promise((resolve, reject) => {
             if (!this.httpServer) {
                 throw new TypeError("Server was never started");
             }

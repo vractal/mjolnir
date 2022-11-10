@@ -22,7 +22,7 @@ describe("Test that the app service can provision a mjolnir when requested from 
             console.warn("Missing Appservice in this context, so cannot stop it.")
         }
     });
-    it("", async function (this: Context) {
+    it("Creates a user and has invited them to a new policy and management room", async function (this: Context) {
         const config = readTestConfig();
         this.appservice = await setupHarness();
         // create a user
