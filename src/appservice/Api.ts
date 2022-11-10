@@ -14,7 +14,7 @@ export class Api {
     constructor(
         private homeserver: string,
         private mjolnirManager: MjolnirManager,
-    ) {}
+    ) { }
 
     private resolveAccessToken(accessToken: string): Promise<string> {
         return new Promise((resolve, reject) => {
@@ -22,11 +22,12 @@ export class Api {
                 url: `${this.homeserver}/_matrix/federation/v1/openid/userinfo`,
                 qs: { access_token: accessToken },
             }, (err, homeserver_response, body) => {
+                console.log('resolve', err, body)
                 if (err) {
                     reject(null);
                 }
 
-                let response: { sub: string};
+                let response: { sub: string };
                 try {
                     response = JSON.parse(body);
                 } catch (e) {
@@ -138,16 +139,22 @@ export class Api {
         }
 
         const userId = await this.resolveAccessToken(accessToken);
-        if (userId === null) {
+        console.log("userId", userId, accessToken);
+        if (userId === null || userId === undefined) {
             response.status(401).send("unauthorised");
             return;
         }
 
         // TODO: provisionNewMjolnir will throw if it fails...
         // https://github.com/matrix-org/mjolnir/issues/408
-        const [mjolnirId, managementRoom] = await this.mjolnirManager.provisionNewMjolnir(userId);
+        try {
 
-        response.status(200).json({ mxid: mjolnirId, roomId: managementRoom });
+            const [mjolnirId, managementRoom] = await this.mjolnirManager.provisionNewMjolnir(userId);
+
+            response.status(200).json({ mxid: mjolnirId, roomId: managementRoom });
+        } catch (e) {
+            response.status(500).send(e);
+        }
     }
 
     /**

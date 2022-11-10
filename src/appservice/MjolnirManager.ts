@@ -8,6 +8,7 @@ import { AccessControl } from "./AccessControl";
 import { Access } from "../models/AccessControlUnit";
 import { randomUUID } from "crypto";
 
+
 /**
  * The MjolnirManager is responsible for:
  * * Provisioning new mjolnir instances.
@@ -72,7 +73,7 @@ export class MjolnirManager {
      * @param ownerId The owner of the mjolnir. We ask for it explicitly to not leak access to another user's mjolnir.
      * @returns The matching managed mjolnir instance.
      */
-    public getMjolnir(mjolnirId: string, ownerId: string): ManagedMjolnir|undefined {
+    public getMjolnir(mjolnirId: string, ownerId: string): ManagedMjolnir | undefined {
         const mjolnir = this.mjolnirs.get(mjolnirId);
         if (mjolnir) {
             if (mjolnir.ownerId !== ownerId) {
@@ -114,7 +115,7 @@ export class MjolnirManager {
             throw new Error(`${requestingUserId} tried to provision a mjolnir when they do not have access ${access.outcome} ${access.rule?.reason ?? 'no reason specified'}`);
         }
         const provisionedMjolnirs = await this.dataStore.lookupByOwner(requestingUserId);
-        if (provisionedMjolnirs.length === 0) {
+        if (provisionedMjolnirs.length < 4) {
             const mjolnirLocalPart = `mjolnir_${randomUUID()}`;
             const [mjolnirUserId, mjolnirClient] = await this.makeMatrixClient(mjolnirLocalPart);
 
