@@ -82,6 +82,20 @@ export class MjolnirAppService {
         return appService;
     }
 
+    /**
+     * Start the appservice for the end user with the appropriate settings from their config and registration file.
+     * @param port The port to make the appservice listen for transactions from the homeserver on (usually sourced from the cli).
+     * @param config The parsed configuration file.
+     * @param registrationFilePath A path to their homeserver registration file.
+     */
+     public static async run(port: number, config: IConfig, registrationFilePath: string) {
+        const dataStore = new PgDataStore(config.db.connectionString);
+        await dataStore.init();
+        const service = await MjolnirAppService.makeMjolnirAppService(config, dataStore, registrationFilePath);
+        // Can't stress how important it is that listen happens last.
+        await service.start(port);
+    }
+
     public onUserQuery (queriedUser: MatrixUser) {
         return {}; // auto-provision users with no additonal data
     }
@@ -132,19 +146,5 @@ export class MjolnirAppService {
         reg.addRegexPattern("users", "@mjolnir_.*", true);
         reg.setRateLimited(false);
         callback(reg);
-    }
-
-    /**
-     * Start the appservice for the end user with the appropriate settings from their config and registration file.
-     * @param port The port to make the appservice listen for transactions from the homeserver on (usually sourced from the cli).
-     * @param config The parsed configuration file.
-     * @param registrationFilePath A path to their homeserver registration file.
-     */
-    public static async run(port: number, config: IConfig, registrationFilePath: string) {
-        const dataStore = new PgDataStore(config.db.connectionString);
-        await dataStore.init();
-        const service = await MjolnirAppService.makeMjolnirAppService(config, dataStore, registrationFilePath);
-        // Can't stress how important it is that listen happens last.
-        await service.start(port);
     }
 }
