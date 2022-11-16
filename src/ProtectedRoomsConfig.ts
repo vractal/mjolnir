@@ -17,17 +17,19 @@ limitations under the License.
 import AwaitLock from 'await-lock';
 import { extractRequestError, LogService, MatrixClient, Permalinks } from "matrix-bot-sdk";
 import { IConfig } from "./config";
+// 
+
 const PROTECTED_ROOMS_EVENT_TYPE = "org.matrix.mjolnir.protected_rooms";
 
 interface ProtectedRoomsAccountData {
     rooms: string[],
-    spaces: [
-        {
-            room_id: string,
-            recursive: boolean,
-        }
-    ]
+    spaces: string[]
 }
+
+// interface ProtectedSpaceData {
+//     room_id: string,
+//     recursive: boolean,
+// }
 
 /**
  * Manages the set of rooms that the user has EXPLICITLY asked to be protected.
@@ -39,6 +41,8 @@ export default class ProtectedRoomsConfig {
      * These are NOT all of the rooms that mjolnir is protecting as with `config.protectAllJoinedRooms`.
      */
     private explicitlyProtectedRooms = new Set</*room id*/string>();
+    private explicitlyProtectedSpaces = new Set</*space id*/string>();
+
     /** This is to prevent clobbering the account data for the protected rooms if several rooms are explicitly protected concurrently. */
     private accountDataLock = new AwaitLock();
 
@@ -80,6 +84,11 @@ export default class ProtectedRoomsConfig {
                     this.explicitlyProtectedRooms.add(roomId);
                 }
             }
+            if (data && data['spaces']) {
+                for (const spaceId of data['spaces']) {
+                    this.explicitlyProtectedSpaces.add(spaceId);
+                }
+            }
         } catch (e) {
             if (e.statusCode === 404) {
                 LogService.warn("ProtectedRoomsConfig", "Couldn't find any explicitly protected rooms from Mjolnir's account data, assuming first start.", extractRequestError(e));
@@ -95,7 +104,7 @@ export default class ProtectedRoomsConfig {
      */
     public async addProtectedRoom(roomId: string): Promise<void> {
         this.explicitlyProtectedRooms.add(roomId);
-        await this.saveProtectedRoomsToAccountData();
+        await this.saveProtectedToAccountData();
     }
 
     /**
@@ -104,7 +113,7 @@ export default class ProtectedRoomsConfig {
      */
     public async removeProtectedRoom(roomId: string): Promise<void> {
         this.explicitlyProtectedRooms.delete(roomId);
-        await this.saveProtectedRoomsToAccountData([roomId]);
+        await this.saveProtectedToAccountData([roomId]);
     }
 
     /**
@@ -116,24 +125,54 @@ export default class ProtectedRoomsConfig {
         return [...this.explicitlyProtectedRooms.keys()]
     }
 
+    public getExplicitlyProtectedSpaces(): string[] {
+        return [...this.explicitlyProtectedSpaces.keys()]
+    }
+
     /**
      * Persist the set of explicitly protected rooms to the client's account data.
      * @param excludeRooms Rooms that should not be persisted to the account data, and removed if already present.
-     */
-    private async saveProtectedRoomsToAccountData(excludeRooms: string[] = []): Promise<void> {
+     * @param excludeSpaces Rooms that should not be persisted to the account data, and removed if already present.
+ 
+    */
+    private async saveProtectedToAccountData(excludeRooms: string[] = [], excludeSpaces: string[] = [] ): Promise<void> {
         // NOTE: this stops Mjolnir from racing with itself when saving the config
         //       but it doesn't stop a third party client on the same account racing with us instead.
         await this.accountDataLock.acquireAsync();
         try {
-            const additionalProtectedRooms: string[] = await this.client.getAccountData(PROTECTED_ROOMS_EVENT_TYPE)
-                .then((rooms: {rooms?: string[]}) => Array.isArray(rooms?.rooms) ? rooms.rooms : [])
-                .catch(e => (LogService.warn("ProtectedRoomsConfig", "Could not load protected rooms from account data", extractRequestError(e)), []));
+            let additionalProtectedRooms = [] as string[];
+            let additionalProtectedSpaces = [] as string[];
+            await this.client.getAccountData(PROTECTED_ROOMS_EVENT_TYPE)
+                .then((accountData: {rooms?: string[], spaces?: string[]}) => {
+                    additionalProtectedRooms = Array.isArray(accountData?.rooms) ? accountData.rooms : []
+                    additionalProtectedSpaces = Array.isArray(accountData?.spaces) ? accountData.spaces : []
+                })
+                .catch(e => {
+                    LogService.warn("ProtectedRoomsConfig", "Could not load protected rooms from account data", extractRequestError(e))
+                });
 
             const roomsToSave = new Set([...this.explicitlyProtectedRooms.keys(), ...additionalProtectedRooms]);
+            const spacesToSave = new Set([...this.explicitlyProtectedSpaces.keys(), ...additionalProtectedSpaces]);
             excludeRooms.forEach(roomsToSave.delete, roomsToSave);
-            await this.client.setAccountData(PROTECTED_ROOMS_EVENT_TYPE, { rooms: Array.from(roomsToSave.keys()) });
+            excludeSpaces.forEach(spacesToSave.delete, spacesToSave);
+
+            await this.client.setAccountData(PROTECTED_ROOMS_EVENT_TYPE, { rooms: Array.from(roomsToSave.keys()), spaces: Array.from(spacesToSave.keys())});
         } finally {
             this.accountDataLock.release();
         }
+    }
+   
+    // private async saveProtectedSpacesToAccountData(excludeSpaces: string[] = []): Promise<void> {
+
+
+
+    public async addProtectedSpace(spaceId: string, recursive: boolean): Promise<void> {
+        this.explicitlyProtectedSpaces.add(spaceId);
+        await this.saveProtectedToAccountData();
+    }
+
+    public async removeProtectedSpace(spaceId: string): Promise<void> {
+        this.explicitlyProtectedSpaces.delete(spaceId);
+        await this.saveProtectedToAccountData([],[spaceId]);
     }
 }

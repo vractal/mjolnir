@@ -34,6 +34,7 @@ import {
 } from "./ProtectionsCommands";
 import { execListProtectedRooms } from "./ListProtectedRoomsCommand";
 import { execAddProtectedRoom, execRemoveProtectedRoom } from "./AddRemoveProtectedRoomsCommand";
+import { execAddProtectedSpace, execRemoveProtectedSpace } from "./AddRemoveProtectedSpaceCommand";
 import { execAddRoomToDirectoryCommand, execRemoveRoomFromDirectoryCommand } from "./AddRemoveRoomFromDirectoryCommand";
 import { execSetPowerLevelCommand } from "./SetPowerLevelCommand";
 import { execShutdownRoomCommand } from "./ShutdownRoomCommand";
@@ -124,8 +125,12 @@ export async function handleCommand(roomId: string, event: { content: { body: st
         } else if (parts[1] === 'kick' && parts.length > 2) {
             return await execKickCommand(roomId, event, mjolnir, parts);
         } else if (parts[1] === 'make' && parts[2] === 'admin' && parts.length > 3) {
-            return await execMakeRoomAdminCommand(roomId, event, mjolnir, parts);
-        } else {
+            return await execMakeRoomAdminCommand(roomId, event, mjolnir, parts);       
+        } else if (parts[1] === 'space' && parts.length > 3 && parts[2] === 'add') {
+            return await execAddProtectedSpace(roomId, event, mjolnir, parts);
+        } else if (parts[1] === 'space' && parts.length > 3 && parts[2] === 'remove') {
+            return await execRemoveProtectedSpace(roomId, event, mjolnir, parts);
+        }  else {
             // Help menu
             const menu = "" +
                 "!mjolnir                                                            - Print status information\n" +
@@ -166,6 +171,8 @@ export async function handleCommand(roomId: string, event: { content: { body: st
                 "!mjolnir shutdown room <room alias/ID> [message]                    - Uses the bot's account to shut down a room, preventing access to the room on this server\n" +
                 "!mjolnir powerlevel <user ID> <power level> [room alias/ID]         - Sets the power level of the user in the specified room (or all protected rooms)\n" +
                 "!mjolnir make admin <room alias> [user alias/ID]                    - Make the specified user or the bot itself admin of the room\n" +
+                "!mjolnir space add <space alias/ID>                                 - Adds a protected space (may cause high server load)\n" +
+                "!mjolnir space remove <space alias/ID>                              - Removes a protected space\n" +             
                 "!mjolnir help                                                       - This menu\n";
             const html = `<b>Mjolnir help:</b><br><pre><code>${htmlEscape(menu)}</code></pre>`;
             const text = `Mjolnir help:\n${menu}`;

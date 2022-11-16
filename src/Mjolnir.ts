@@ -39,6 +39,7 @@ import ManagementRoomOutput from "./ManagementRoomOutput";
 import { ProtectionManager } from "./protections/ProtectionManager";
 import { RoomMemberManager } from "./RoomMembers";
 import ProtectedRoomsConfig from "./ProtectedRoomsConfig";
+import { Space } from "matrix-bot-sdk";
 
 export const STATE_NOT_STARTED = "not_started";
 export const STATE_CHECKING_PERMISSIONS = "checking_permissions";
@@ -291,6 +292,7 @@ export class Mjolnir {
             await this.protectedRoomsConfig.loadProtectedRoomsFromConfig(this.config);
             await this.protectedRoomsConfig.loadProtectedRoomsFromAccountData();
             this.protectedRoomsConfig.getExplicitlyProtectedRooms().forEach(this.protectRoom, this);
+            this.protectedRoomsConfig.getExplicitlyProtectedSpaces().forEach(this.protectSpace, this);
             await this.resyncJoinedRooms(false);
             await this.buildWatchedPolicyLists();
             await this.protectionManager.start();
@@ -384,19 +386,62 @@ export class Mjolnir {
         this.protectedRoomsTracker.removeProtectedRoom(roomId);
     }
 
-    public async addProtectedSpace(roomId: string): Promise<void> {
-        await this.protectedRoomsConfig.addProtectedSpace(roomId);
-        await this.protectSpace(roomId);
+    public async addProtectedSpace(spaceId: string): Promise<void> {
+        await this.protectedRoomsConfig.addProtectedSpace(spaceId, false);
+        await this.protectSpace(spaceId);
     }
 
-    private async protectSpace(roomId: string): Promise<void> {
+    public async removeProtectedSpace(spaceId: string): Promise<void> {
+        await this.protectedRoomsConfig.removeProtectedSpace(spaceId);
+        await this.unprotectSpace(spaceId);
+    }
+
+    private async protectSpace(spaceId: string): Promise<void> {
         // create a ProtectedSpace and keep that somewhere,
         // protected space could use ProtectedRoomSet for all its rooms.
         // don't bother with recursively following spaces yet, but we probably need something like
         // m.space.parent for that to work properly since anyone can add any room to spaces.
-        //  
-    }
+        
+            const space = new Space(spaceId, this.client);
+            const rooms = await space.getChildEntities();
+            const joinedRooms = await this.client.getJoinedRooms()
+            for (const roomId in rooms) {
+                if (joinedRooms.includes(roomId)) {
+                    this.protectRoom(roomId)
+                } else {
+                    const roomCreateEvent = await this.client.getRoomStateEvent(roomId, 'm.room.create', '');
+                    const type = roomCreateEvent?.content?.type
+                    if (type !== 'm.space') {
+                        await this.client.joinRoom(roomId)
+                        this.protectRoom(roomId)
+                    }
+                }
 
+                this.makeUserRoomAdmin(roomId)
+
+            }
+    
+     }
+    /**
+     * Unprotect a space.
+     * @param spaceId The space to stop protecting. Will loop all joined child rooms and unprotect
+     */
+     private async unprotectSpace(spaceId: string): Promise<void> {
+        // unprotect all rooms in the space
+        const space = new Space(spaceId, this.client);
+            const rooms = await space.getChildEntities();
+            const joinedRooms = await this.client.getJoinedRooms()
+            for (const roomId in rooms) {
+                if (joinedRooms.includes(roomId)) {
+                    this.unprotectRoom(roomId)
+                } 
+            }
+     }
+        
+    
+
+
+    
     /**
      * Resynchronize the protected rooms with rooms that the mjolnir user is joined to.
      * This is to implement `config.protectAllJoinedRooms` functionality.
