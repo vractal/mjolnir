@@ -12,7 +12,6 @@ up:
     - yarn install
     - npx ts-node src/appservice/cli.ts -r -u "http://host.docker.internal:9000"
     - cp mjolnir-registration.yaml $MX_TEST_SYNAPSE_DIR/data/
-
   after:
     # Wait until Synapse is ready
     - until curl localhost:9999 --stderr /dev/null > /dev/null; do echo "Waiting for Synapse..."; sleep 1s; done

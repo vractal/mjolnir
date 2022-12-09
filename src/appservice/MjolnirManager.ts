@@ -1,13 +1,16 @@
 import { Mjolnir } from "../Mjolnir";
-import { Request, WeakEvent, BridgeContext, Bridge } from "matrix-appservice-bridge";
-import { IConfig, read as configRead } from "../config";
+import { Request, WeakEvent, BridgeContext, Bridge, Intent, Logger } from "matrix-appservice-bridge";
+import { getProvisionedMjolnirConfig } from "../config";
 import PolicyList from "../models/PolicyList";
 import { Permalinks, MatrixClient } from "matrix-bot-sdk";
 import { DataStore } from "./datastore";
 import { AccessControl } from "./AccessControl";
 import { Access } from "../models/AccessControlUnit";
 import { randomUUID } from "crypto";
+import EventEmitter from "events";
+import { MatrixEmitter } from "../MatrixEmitter";
 
+const log = new Logger('MjolnirManager');
 
 /**
  * The MjolnirManager is responsible for:
@@ -40,18 +43,6 @@ export class MjolnirManager {
     }
 
     /**
-     * Gets the default config to give the newly provisioned mjolnirs.
-     * @param managementRoomId A room that has been created to serve as the mjolnir's management room for the owner.
-     * @returns A config that can be directly used by the new mjolnir.
-     */
-    public getDefaultMjolnirConfig(managementRoomId: string): IConfig {
-        let config = configRead();
-        config.managementRoom = managementRoomId;
-        config.protectedRooms = [];
-        return config;
-    }
-
-    /**
      * Creates a new mjolnir for a user.
      * @param requestingUserId The user that is requesting this mjolnir and who will own it.
      * @param managementRoomId An existing matrix room to act as the management room.
@@ -59,10 +50,17 @@ export class MjolnirManager {
      * @returns A new managed mjolnir.
      */
     public async makeInstance(requestingUserId: string, managementRoomId: string, client: MatrixClient): Promise<ManagedMjolnir> {
+        const intentListener = new MatrixIntentListener(await client.getUserId());
         const managedMjolnir = new ManagedMjolnir(
             requestingUserId,
-            await Mjolnir.setupMjolnirFromConfig(client, this.getDefaultMjolnirConfig(managementRoomId))
+            await Mjolnir.setupMjolnirFromConfig(
+                client,
+                intentListener,
+                getProvisionedMjolnirConfig(managementRoomId)
+            ),
+            intentListener,
         );
+        await managedMjolnir.start();
         this.mjolnirs.set(await client.getUserId(), managedMjolnir);
         return managedMjolnir;
     }
@@ -73,7 +71,7 @@ export class MjolnirManager {
      * @param ownerId The owner of the mjolnir. We ask for it explicitly to not leak access to another user's mjolnir.
      * @returns The matching managed mjolnir instance.
      */
-    public getMjolnir(mjolnirId: string, ownerId: string): ManagedMjolnir | undefined {
+    public getMjolnir(mjolnirId: string, ownerId: string): ManagedMjolnir|undefined {
         const mjolnir = this.mjolnirs.get(mjolnirId);
         if (mjolnir) {
             if (mjolnir.ownerId !== ownerId) {
@@ -98,6 +96,9 @@ export class MjolnirManager {
         return [...this.mjolnirs.values()].filter(mjolnir => mjolnir.ownerId !== ownerId);
     }
 
+    /**
+     * Listener that should be setup and called by `MjolnirAppService` while listening to the bridge abstraction provided by matrix-appservice-bridge.
+     */
     public onEvent(request: Request<WeakEvent>, context: BridgeContext) {
         // TODO We need a way to map a room id (that the event is from) to a set of managed mjolnirs that should be informed.
         // https://github.com/matrix-org/mjolnir/issues/412
@@ -115,17 +116,17 @@ export class MjolnirManager {
             throw new Error(`${requestingUserId} tried to provision a mjolnir when they do not have access ${access.outcome} ${access.rule?.reason ?? 'no reason specified'}`);
         }
         const provisionedMjolnirs = await this.dataStore.lookupByOwner(requestingUserId);
-        if (provisionedMjolnirs.length < 4) {
+        if (provisionedMjolnirs.length === 0) {
             const mjolnirLocalPart = `mjolnir_${randomUUID()}`;
-            const [mjolnirUserId, mjolnirClient] = await this.makeMatrixClient(mjolnirLocalPart);
+            const mjIntent = await this.makeMatrixIntent(mjolnirLocalPart);
 
-            const managementRoomId = await mjolnirClient.createRoom({
+            const managementRoomId = await mjIntent.matrixClient.createRoom({
                 preset: 'private_chat',
                 invite: [requestingUserId],
                 name: `${requestingUserId}'s mjolnir`
             });
 
-            const mjolnir = await this.makeInstance(requestingUserId, managementRoomId, mjolnirClient);
+            const mjolnir = await this.makeInstance(requestingUserId, managementRoomId, mjIntent.matrixClient);
             await mjolnir.createFirstList(requestingUserId, "list");
 
             await this.dataStore.store({
@@ -134,7 +135,7 @@ export class MjolnirManager {
                 management_room: managementRoomId,
             });
 
-            return [mjolnirUserId, managementRoomId];
+            return [mjIntent.userId, managementRoomId];
         } else {
             throw new Error(`User: ${requestingUserId} has already provisioned ${provisionedMjolnirs.length} mjolnirs.`);
         }
@@ -143,13 +144,12 @@ export class MjolnirManager {
     /**
      * Utility that creates a matrix client for a virtual user on our homeserver with the specified loclapart.
      * @param localPart The localpart of the virtual user we need a client for.
-     * @returns A tuple with the complete mxid of the virtual user and a MatrixClient.
+     * @returns A bridge intent with the complete mxid of the virtual user and a MatrixClient.
      */
-    private async makeMatrixClient(localPart: string): Promise<[string, MatrixClient]> {
-        // Now we need to make one of the transparent mjolnirs and add it to the monitor.
-        const mjIntent = await this.bridge.getIntentFromLocalpart(localPart);
+    private async makeMatrixIntent(localPart: string): Promise<Intent> {
+        const mjIntent = this.bridge.getIntentFromLocalpart(localPart);
         await mjIntent.ensureRegistered();
-        return [mjIntent.userId, mjIntent.matrixClient];
+        return mjIntent;
     }
 
     // TODO: We need to check that an owner still has access to the appservice each time they send a command to the mjolnir or use the web api.
@@ -159,46 +159,35 @@ export class MjolnirManager {
      */
     private async createMjolnirsFromDataStore() {
         for (const mjolnirRecord of await this.dataStore.list()) {
-            const [_mjolnirUserId, mjolnirClient] = await this.makeMatrixClient(mjolnirRecord.local_part);
+            const mjIntent = await this.makeMatrixIntent(mjolnirRecord.local_part);
             const access = this.accessControl.getUserAccess(mjolnirRecord.owner);
             if (access.outcome !== Access.Allowed) {
                 // Don't await, we don't want to clobber initialization just because we can't tell someone they're no longer allowed.
-                mjolnirClient.sendNotice(mjolnirRecord.management_room, `Your mjolnir has been disabled by the administrator: ${access.rule?.reason ?? "no reason supplied"}`);
+                mjIntent.matrixClient.sendNotice(mjolnirRecord.management_room, `Your mjolnir has been disabled by the administrator: ${access.rule?.reason ?? "no reason supplied"}`);
             } else {
                 await this.makeInstance(
                     mjolnirRecord.owner,
                     mjolnirRecord.management_room,
-                    mjolnirClient,
-                );
+                    mjIntent.matrixClient,
+                ).catch((e: any) => {
+                    log.error(`Could not start mjolnir ${mjolnirRecord.local_part} for ${mjolnirRecord.owner}:`, e);
+                    // Don't await, we don't want to clobber initialization if this fails.
+                    mjIntent.matrixClient.sendNotice(mjolnirRecord.management_room, `Your mjolnir could not be started. Please alert the administrator`);
+                });
             }
         }
     }
 }
 
-// Isolating this mjolnir is going to require provisioning an access token just for this user to be useful.
-// We can use fork and node's IPC to inform the process of matrix evnets.
 export class ManagedMjolnir {
     public constructor(
         public readonly ownerId: string,
         private readonly mjolnir: Mjolnir,
+        private readonly matrixEmitter: MatrixIntentListener,
     ) { }
 
     public async onEvent(request: Request<WeakEvent>) {
-        // phony sync.
-        const mxEvent = request.getData();
-        if (mxEvent['type'] !== undefined) {
-            this.mjolnir.client.emit('room.event', mxEvent.room_id, mxEvent);
-            if (mxEvent.type === 'm.room.message') {
-                this.mjolnir.client.emit('room.message', mxEvent.room_id, mxEvent);
-            }
-            // TODO: We need to figure out how to inform the mjolnir of `room.join`.
-            // https://github.com/matrix-org/mjolnir/issues/411
-        }
-        if (mxEvent['type'] === 'm.room.member') {
-            if (mxEvent['content']['membership'] === 'invite' && mxEvent.state_key === await this.mjolnir.client.getUserId()) {
-                this.mjolnir.client.emit('room.invite', mxEvent.room_id, mxEvent);
-            }
-        }
+        this.matrixEmitter.handleEvent(request.getData());
     }
 
     public async joinRoom(roomId: string) {
@@ -216,10 +205,70 @@ export class ManagedMjolnir {
             { name: `${mjolnirOwnerId}'s policy room` }
         );
         const roomRef = Permalinks.forRoom(listRoomId);
+        await this.mjolnir.addProtectedRoom(listRoomId);
         return await this.mjolnir.watchList(roomRef);
     }
 
     public get managementRoomId(): string {
         return this.mjolnir.managementRoomId;
+    }
+
+    /**
+     * Intended to be called by the MjolnirManager to make sure the mjolnir is ready to listen to events.
+     * This managed mjolnir should not be informed of any events via `onEvent` until `start` is called.
+     */
+    public async start(): Promise<void> {
+        await this.mjolnir.start();
+    }
+}
+
+/**
+ * This is used to listen for events intended for a single mjolnir that resides in the appservice.
+ * This exists entirely because the Mjolnir class was previously designed only to receive events
+ * from a syncing matrix-bot-sdk MatrixClient. Since appservices provide a transactional push
+ * api for all users on the appservice, almost the opposite of sync, we needed to create an
+ * interface for both. See `MatrixEmitter`.
+ */
+export class MatrixIntentListener extends EventEmitter implements MatrixEmitter {
+    constructor(private readonly mjolnirId: string) {
+        super()
+    }
+
+    public handleEvent(mxEvent: WeakEvent) {
+        // These are ordered to be the same as matrix-bot-sdk's MatrixClient
+        // They shouldn't need to be, but they are just in case it matters.
+        if (mxEvent['type'] === 'm.room.member' &&  mxEvent.state_key === this.mjolnirId) {
+            if (mxEvent['content']['membership'] === 'leave') {
+                this.emit('room.leave', mxEvent.room_id, mxEvent);
+            }
+            if (mxEvent['content']['membership'] === 'invite') {
+                this.emit('room.invite', mxEvent.room_id, mxEvent);
+            }
+            if (mxEvent['content']['membership'] === 'join') {
+                this.emit('room.join', mxEvent.room_id, mxEvent);
+            }
+        }
+        if (mxEvent.type === 'm.room.message') {
+            this.emit('room.message', mxEvent.room_id, mxEvent);
+        }
+        if (mxEvent.type === 'm.room.tombstone' && mxEvent.state_key === '') {
+            this.emit('room.archived', mxEvent.room_id, mxEvent);
+        }
+        this.emit('room.event', mxEvent.room_id, mxEvent);
+
+    }
+
+    /**
+     * To be called by `Mjolnir`.
+     */
+    public async start() {
+        // Nothing to do.
+    }
+
+    /**
+     * To be called by `Mjolnir`.
+     */
+    public stop() {
+        // Nothing to do.
     }
 }

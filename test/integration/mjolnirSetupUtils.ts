@@ -23,7 +23,7 @@ import {
 } from "matrix-bot-sdk";
 import { Mjolnir}  from '../../src/Mjolnir';
 import { overrideRatelimitForUser, registerUser } from "./clientHelper";
-import { patchMatrixClient } from "../../src/utils";
+import { initializeSentry, patchMatrixClient } from "../../src/utils";
 import { IConfig } from "../../src/config";
 
 /**
@@ -49,6 +49,8 @@ export async function ensureAliasedRoomExists(client: MatrixClient, alias: strin
 }
 
 async function configureMjolnir(config: IConfig) {
+    // Initialize error monitoring as early as possible.
+    initializeSentry(config);
     try {
         await registerUser(config.homeserverUrl, config.pantalaimon.username, config.pantalaimon.username, config.pantalaimon.password, true)
     } catch (e) {
@@ -82,7 +84,7 @@ export async function makeMjolnir(config: IConfig): Promise<Mjolnir> {
     await overrideRatelimitForUser(config.homeserverUrl, await client.getUserId());
     patchMatrixClient();
     await ensureAliasedRoomExists(client, config.managementRoom);
-    let mj = await Mjolnir.setupMjolnirFromConfig(client, config);
+    let mj = await Mjolnir.setupMjolnirFromConfig(client, client, config);
     globalClient = client;
     globalMjolnir = mj;
     return mj;

@@ -17,14 +17,18 @@ limitations under the License.
 import {
     LogLevel,
     LogService,
-    MatrixClient,
     MatrixGlob,
     getRequestFn,
     setRequestFn,
 } from "matrix-bot-sdk";
 import { ClientRequest, IncomingMessage } from "http";
 import { default as parseDuration } from "parse-duration";
+import * as Sentry from '@sentry/node';
+import * as _ from '@sentry/tracing'; // Performing the import activates tracing.
+
 import ManagementRoomOutput from "./ManagementRoomOutput";
+import { IConfig } from "./config";
+import { MatrixSendClient } from "./MatrixEmitter";
 
 // Define a few aliases to simplify parsing durations.
 
@@ -77,7 +81,7 @@ export function isTrueJoinEvent(event: any): boolean {
  * @param limit The number of messages to redact from most recent first. If the limit is reached then no further messages will be redacted.
  * @param noop Whether to operate in noop mode.
  */
-export async function redactUserMessagesIn(client: MatrixClient, managementRoom: ManagementRoomOutput, userIdOrGlob: string, targetRoomIds: string[], limit = 1000, noop = false) {
+export async function redactUserMessagesIn(client: MatrixSendClient, managementRoom: ManagementRoomOutput, userIdOrGlob: string, targetRoomIds: string[], limit = 1000, noop = false) {
     for (const targetRoomId of targetRoomIds) {
         await managementRoom.logMessage(LogLevel.DEBUG, "utils#redactUserMessagesIn", `Fetching sent messages for ${userIdOrGlob} in ${targetRoomId} to redact...`, targetRoomId);
 
@@ -97,7 +101,7 @@ export async function redactUserMessagesIn(client: MatrixClient, managementRoom:
 /**
  * Gets all the events sent by a user (or users if using wildcards) in a given room ID, since
  * the time they joined.
- * @param {MatrixClient} client The client to use.
+ * @param {MatrixSendClient} client The client to use.
  * @param {string} sender The sender. A matrix user id or a wildcard to match multiple senders e.g. *.example.com.
  * Can also be used to generically search the sender field e.g. *bob* for all events from senders with "bob" in them.
  * See `MatrixGlob` in matrix-bot-sdk.
@@ -110,7 +114,7 @@ export async function redactUserMessagesIn(client: MatrixClient, managementRoom:
  * The callback will only be called if there are any relevant events.
  * @returns {Promise<void>} Resolves when either: the limit has been reached, no relevant events could be found or there is no more timeline to paginate.
  */
-export async function getMessagesByUserIn(client: MatrixClient, sender: string, roomId: string, limit: number, cb: (events: any[]) => void): Promise<void> {
+export async function getMessagesByUserIn(client: MatrixSendClient, sender: string, roomId: string, limit: number, cb: (events: any[]) => void): Promise<void> {
     const isGlob = sender.includes("*");
     const roomEventFilter = {
         rooms: [roomId],
@@ -396,3 +400,27 @@ export function patchMatrixClient() {
     patchMatrixClientForConciseExceptions();
     patchMatrixClientForRetry();
 }
+
+/**
+ * Initialize Sentry for error monitoring and reporting.
+ *
+ * This method is idempotent. If `config` specifies that Sentry
+ * should not be used, it does nothing.
+ */
+export function initializeSentry(config: IConfig) {
+    if (sentryInitialized) {
+        return;
+    }
+    if (config.health.sentry) {
+        // Configure error monitoring with Sentry.
+        let sentry = config.health.sentry;
+        Sentry.init({
+            dsn: sentry.dsn,
+            tracesSampleRate: sentry.tracesSampleRate,
+        });
+        sentryInitialized = true;
+    }
+}
+// Set to `true` once we have initialized `Sentry` to ensure
+// that we do not attempt to initialize it more than once.
+let sentryInitialized = false;

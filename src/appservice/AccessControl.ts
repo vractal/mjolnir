@@ -19,10 +19,11 @@ import AccessControlUnit, { EntityAccess } from "../models/AccessControlUnit";
 import PolicyList from "../models/PolicyList";
 import { Permalinks } from "matrix-bot-sdk";
 
-// We need to refactor AccessControlUnit so you can have
-// previousAccess and currentAccess listener for changes.
-// wait that only works for literals not globs...
-// i guess when the rule change is a glob we have to scan everything.
+/**
+ * Utility to manage which users have access to the application service,
+ * meaning whether a user is able to provision a mjolnir or continue to use one.
+ * Internally we use a policy list within matrix to determine who has access via the `AccessControlUnit`.
+ */
 export class AccessControl {
 
     private constructor(
@@ -31,14 +32,18 @@ export class AccessControl {
         ) {
     }
 
+    /**
+     * Construct and initialize access control for the `MjolnirAppService`.
+     * @param accessControlListId The room id of a policy list used to manage access to the appservice (who can provision & use mjolniren)
+     * @param bridge The matrix-appservice-bridge, used to get the appservice bot.
+     * @returns A new instance of `AccessControl` to be used by `MjolnirAppService`.
+     */
     public static async setupAccessControl(
+        /** The room id for the access control list. */
         accessControlListId: string,
         bridge: Bridge,
     ): Promise<AccessControl> {
-        const joinedRooms = await bridge.getBot().getJoinedRooms();
-        if (!joinedRooms.includes(accessControlListId)) {
-            await bridge.getBot().getClient().joinRoom(accessControlListId);
-        }
+        await bridge.getBot().getClient().joinRoom(accessControlListId);
         const accessControlList = new PolicyList(
             accessControlListId,
             Permalinks.forRoom(accessControlListId),

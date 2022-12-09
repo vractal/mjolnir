@@ -21,11 +21,6 @@ export interface CreateMjolnirResponse {
 export class MjolnirWebAPIClient {
 
     private constructor(
-        private readonly matrixClient: MatrixClient,
-        /**
-         * This will want refactoring later on since, well, for some reason our API is designed to accept the token in request body and not authorization header :( 
-         * it will need to include the expiry for the token.
-         */
         private readonly openIDToken: string,
         private readonly baseURL: string,
     ) {
@@ -34,7 +29,7 @@ export class MjolnirWebAPIClient {
 
     public static async makeClient(client: MatrixClient, baseUrl: string): Promise<MjolnirWebAPIClient> {
         const token = await getOpenIDToken(client);
-        return new MjolnirWebAPIClient(client, token, baseUrl);
+        return new MjolnirWebAPIClient(token, baseUrl);
     }
 
     public async createMjolnir(roomToProtectId: string): Promise<CreateMjolnirResponse> {

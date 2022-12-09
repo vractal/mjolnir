@@ -18,7 +18,6 @@ import {
     extractRequestError,
     LogLevel,
     LogService,
-    MatrixClient,
     MembershipEvent,
     Permalinks,
 } from "matrix-bot-sdk";
@@ -32,7 +31,7 @@ import { ReportPoller } from "./report/ReportPoller";
 import { WebAPIs } from "./webapis/WebAPIs";
 import RuleServer from "./models/RuleServer";
 import { ThrottlingQueue } from "./queues/ThrottlingQueue";
-import { IConfig } from "./config";
+import { getDefaultConfig, IConfig } from "./config";
 import PolicyList from "./models/PolicyList";
 import { ProtectedRoomsSet } from "./ProtectedRoomsSet";
 import ManagementRoomOutput from "./ManagementRoomOutput";
@@ -40,6 +39,7 @@ import { ProtectionManager } from "./protections/ProtectionManager";
 import { RoomMemberManager } from "./RoomMembers";
 import ProtectedRoomsConfig from "./ProtectedRoomsConfig";
 import { Space } from "matrix-bot-sdk";
+import { MatrixEmitter, MatrixSendClient } from "./MatrixEmitter";
 
 export const STATE_NOT_STARTED = "not_started";
 export const STATE_CHECKING_PERMISSIONS = "checking_permissions";
@@ -89,15 +89,15 @@ export class Mjolnir {
 
     /**
      * Adds a listener to the client that will automatically accept invitations.
-     * @param {MatrixClient} client
+     * @param {MatrixSendClient} client
      * @param options By default accepts invites from anyone.
      * @param {string} options.managementRoom The room to report ignored invitations to if `recordIgnoredInvites` is true.
      * @param {boolean} options.recordIgnoredInvites Whether to report invites that will be ignored to the `managementRoom`.
      * @param {boolean} options.autojoinOnlyIfManager Whether to only accept an invitation by a user present in the `managementRoom`.
      * @param {string} options.acceptInvitesFromSpace A space of users to accept invites from, ignores invites form users not in this space.
      */
-    private static addJoinOnInviteListener(mjolnir: Mjolnir, client: MatrixClient, options: { [key: string]: any }) {
-        client.on("room.invite", async (roomId: string, inviteEvent: any) => {
+    private static addJoinOnInviteListener(mjolnir: Mjolnir, client: MatrixSendClient, options: { [key: string]: any }) {
+        mjolnir.matrixEmitter.on("room.invite", async (roomId: string, inviteEvent: any) => {
             const membershipEvent = new MembershipEvent(inviteEvent);
 
             const reportInvite = async () => {
@@ -131,17 +131,19 @@ export class Mjolnir {
                     });
                 if (!spaceUserIds.includes(membershipEvent.sender)) return reportInvite(); // ignore invite
             }
-
             return client.joinRoom(roomId);
         });
     }
 
     /**
      * Create a new Mjolnir instance from a client and the options in the configuration file, ready to be started.
-     * @param {MatrixClient} client The client for Mjolnir to use.
+     * @param {MatrixSendClient} client The client for Mjolnir to use.
      * @returns A new Mjolnir instance that can be started without further setup.
      */
-    static async setupMjolnirFromConfig(client: MatrixClient, config: IConfig): Promise<Mjolnir> {
+    static async setupMjolnirFromConfig(client: MatrixSendClient, matrixEmitter: MatrixEmitter, config: IConfig): Promise<Mjolnir> {
+        if (!config.autojoinOnlyIfManager && config.acceptInvitesFromSpace === getDefaultConfig().acceptInvitesFromSpace) {
+            throw new TypeError("`autojoinOnlyIfManager` has been disabled, yet no space has been provided for `acceptInvitesFromSpace`.");
+        }
         const policyLists: PolicyList[] = [];
         const joinedRooms = await client.getJoinedRooms();
 
@@ -153,15 +155,16 @@ export class Mjolnir {
         }
 
         const ruleServer = config.web.ruleServer ? new RuleServer() : null;
-        const mjolnir = new Mjolnir(client, await client.getUserId(), managementRoomId, config, policyLists, ruleServer);
+        const mjolnir = new Mjolnir(client, await client.getUserId(), matrixEmitter, managementRoomId, config, policyLists, ruleServer);
         await mjolnir.managementRoomOutput.logMessage(LogLevel.INFO, "index", "Mjolnir is starting up. Use !mjolnir to query status.");
         Mjolnir.addJoinOnInviteListener(mjolnir, client, config);
         return mjolnir;
     }
 
     constructor(
-        public readonly client: MatrixClient,
+        public readonly client: MatrixSendClient,
         private readonly clientUserId: string,
+        public readonly matrixEmitter: MatrixEmitter,
         public readonly managementRoomId: string,
         public readonly config: IConfig,
         private policyLists: PolicyList[],
@@ -172,9 +175,9 @@ export class Mjolnir {
 
         // Setup bot.
 
-        client.on("room.event", this.handleEvent.bind(this));
+        matrixEmitter.on("room.event", this.handleEvent.bind(this));
 
-        client.on("room.message", async (roomId, event) => {
+        matrixEmitter.on("room.message", async (roomId, event) => {
             if (roomId !== this.managementRoomId) return;
             if (!event['content']) return;
 
@@ -209,11 +212,11 @@ export class Mjolnir {
             }
         });
 
-        client.on("room.join", (roomId: string, event: any) => {
+        matrixEmitter.on("room.join", (roomId: string, event: any) => {
             LogService.info("Mjolnir", `Joined ${roomId}`);
             return this.resyncJoinedRooms();
         });
-        client.on("room.leave", (roomId: string, event: any) => {
+        matrixEmitter.on("room.leave", (roomId: string, event: any) => {
             LogService.info("Mjolnir", `Left ${roomId}`);
             return this.resyncJoinedRooms();
         });
@@ -235,7 +238,7 @@ export class Mjolnir {
             this.reportPoller = new ReportPoller(this, this.reportManager);
         }
         // Setup join/leave listener
-        this.roomJoins = new RoomMemberManager(this.client);
+        this.roomJoins = new RoomMemberManager(this.matrixEmitter);
         this.taskQueue = new ThrottlingQueue(this, config.backgroundDelayMS);
 
         this.protectionManager = new ProtectionManager(this);
@@ -294,21 +297,24 @@ export class Mjolnir {
             this.protectedRoomsConfig.getExplicitlyProtectedRooms().forEach(this.protectRoom, this);
             this.protectedRoomsConfig.getExplicitlyProtectedSpaces().forEach(this.protectSpace, this);
             await this.resyncJoinedRooms(false);
+            // We have to build the policy lists before calling `resyncJoinedRooms` otherwise mjolnir will try to protect
+            // every policy list we are already joined to, as mjolnir will not be able to distinguish them from normal rooms.
             await this.buildWatchedPolicyLists();
+            await this.resyncJoinedRooms(false);
             await this.protectionManager.start();
 
             if (this.config.verifyPermissionsOnStartup) {
                 await this.managementRoomOutput.logMessage(LogLevel.INFO, "Mjolnir@startup", "Checking permissions...");
-                await this.protectedRoomsTracker.verifyPermissions(this.config.verboseLogging);
+                await this.protectedRoomsTracker.verifyPermissions();
             }
 
             // Start the bot.
-            await this.client.start();
+            await this.matrixEmitter.start();
 
             this.currentState = STATE_SYNCING;
             if (this.config.syncOnStartup) {
                 await this.managementRoomOutput.logMessage(LogLevel.INFO, "Mjolnir@startup", "Syncing lists...");
-                await this.protectedRoomsTracker.syncLists(this.config.verboseLogging);
+                await this.protectedRoomsTracker.syncLists();
             }
 
             this.currentState = STATE_RUNNING;
@@ -319,11 +325,10 @@ export class Mjolnir {
                 LogService.error("Mjolnir", extractRequestError(err));
                 this.stop();
                 await this.managementRoomOutput.logMessage(LogLevel.ERROR, "Mjolnir@startup", "Startup failed due to error - see console");
-                throw err;
             } catch (e) {
                 LogService.error("Mjolnir", `Failed to report startup error to the management room: ${e}`);
-                throw err;
             }
+            throw err;
         }
     }
 
@@ -332,7 +337,7 @@ export class Mjolnir {
      */
     public stop() {
         LogService.info("Mjolnir", "Stopping Mjolnir...");
-        this.client.stop();
+        this.matrixEmitter.stop();
         this.webapis.stop();
         this.reportPoller?.stop();
     }
@@ -480,7 +485,7 @@ export class Mjolnir {
         }
 
         if (withSync) {
-            await this.protectedRoomsTracker.syncLists(this.config.verboseLogging);
+            await this.protectedRoomsTracker.syncLists();
         }
     }
 
@@ -493,7 +498,6 @@ export class Mjolnir {
     private async addPolicyList(roomId: string, roomRef: string): Promise<PolicyList> {
         const list = new PolicyList(roomId, roomRef, this.client);
         this.ruleServer?.watch(list);
-        list.on('PolicyList.batch', (...args) => this.protectedRoomsTracker.syncWithPolicyList(...args));
         await list.updateList();
         this.policyLists.push(list);
         this.protectedRoomsTracker.watchList(list);
@@ -658,3 +662,4 @@ export class Mjolnir {
         }
     }
 }
+

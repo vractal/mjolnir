@@ -15,9 +15,9 @@ limitations under the License.
 */
 
 import * as fs from "fs";
-import * as path from "path";
 import { load } from "js-yaml";
-import { MatrixClient } from "matrix-bot-sdk";
+import { MatrixClient, LogService } from "matrix-bot-sdk";
+import Config from "config";
 
 /**
  * The configuration, as read from production.yaml
@@ -37,8 +37,13 @@ export interface IConfig {
         password: string;
     };
     dataPath: string;
-    acceptInvitesFromSpace: string;
+    /**
+     * If true, Mjolnir will only accept invites from users present in managementRoom.
+     * Otherwise a space must be provided to `acceptInvitesFromSpace`.
+     */
     autojoinOnlyIfManager: boolean;
+    /** Mjolnir will accept invites from members of this space if `autojoinOnlyIfManager` is false. */
+    acceptInvitesFromSpace: string;
     recordIgnoredInvites: boolean;
     managementRoom: string;
     verboseLogging: boolean;
@@ -84,6 +89,16 @@ export interface IConfig {
             healthyStatus: number;
             unhealthyStatus: number;
         };
+        // If specified, attempt to upload any crash statistics to sentry.
+        sentry?: {
+            dsn: string;
+
+            // Frequency of performance monitoring.
+            //
+            // A number in [0.0, 1.0], where 0.0 means "don't bother with tracing"
+            // and 1.0 means "trace performance at every opportunity".
+            tracesSampleRate: number;
+        };
     };
     web: {
         enabled: boolean;
@@ -117,7 +132,7 @@ const defaultConfig: IConfig = {
     },
     dataPath: "/data/storage",
     acceptInvitesFromSpace: '!noop:example.org',
-    autojoinOnlyIfManager: false,
+    autojoinOnlyIfManager: true,
     recordIgnoredInvites: false,
     managementRoom: "!noop:example.org",
     verboseLogging: false,
@@ -170,12 +185,73 @@ const defaultConfig: IConfig = {
     },
 };
 
-export function read(): IConfig {
-    const config_dir = process.env.NODE_CONFIG_DIR || "./config";
-    const config_file = `${process.env.NODE_ENV || "default"}.yaml`
+export function getDefaultConfig(): IConfig {
+    return Config.util.cloneDeep(defaultConfig);
+}
 
-    const content = fs.readFileSync(path.join(config_dir, config_file), "utf8");
-    const parsed = load(content);
-    const config = {...defaultConfig, ...(parsed as object)} as IConfig;
+/**
+ * Grabs an explicit path provided for mjolnir's config from an arguments vector if provided, otherwise returns undefined.
+ * @param argv An arguments vector sourced from `process.argv`.
+ * @returns The path if one was provided or undefined.
+ */
+function configPathFromArguments(argv: string[]): undefined|string {
+    const configOptionIndex = argv.findIndex(arg => arg === "--mjolnir-config");
+    if (configOptionIndex > 0) {
+        const configOptionPath = argv.at(configOptionIndex + 1);
+        if (!configOptionPath) {
+            throw new Error("No path provided with option --mjolnir-config");
+        }
+        return configOptionPath;
+    } else {
+        return;
+    }
+}
+
+export function read(): IConfig {
+    const explicitConfigPath = configPathFromArguments(process.argv);
+    if (explicitConfigPath) {
+        const content = fs.readFileSync(explicitConfigPath, "utf8");
+        const parsed = load(content);
+        return Config.util.extendDeep({}, defaultConfig, parsed);
+    } else {
+        const config = Config.util.extendDeep({}, defaultConfig, Config.util.toObject()) as IConfig;
+        return config;
+    }
+}
+
+/**
+ * Provides a config for each newly provisioned mjolnir in appservice mode.
+ * @param managementRoomId A room that has been created to serve as the mjolnir's management room for the owner.
+ * @returns A config that can be directly used by the new mjolnir.
+ */
+export function getProvisionedMjolnirConfig(managementRoomId: string): IConfig {
+    // These are keys that are allowed to be configured for provisioned mjolnirs.
+    // We need a restricted set so that someone doesn't accidentally enable webservers etc
+    // on every created Mjolnir, which would result in very confusing error messages.
+    const allowedKeys = [
+        "commands",
+        "verboseLogging",
+        "logLevel",
+        "syncOnStartup",
+        "verifyPermissionsOnStartup",
+        "fasterMembershipChecks",
+        "automaticallyRedactForReasons",
+        "protectAllJoinedRooms",
+        "backgroundDelayMS",
+    ];
+    const configTemplate = read(); // we use the standard bot config as a template for every provisioned mjolnir.
+    const unusedKeys = Object.keys(configTemplate).filter(key => !allowedKeys.includes(key));
+    if (unusedKeys.length > 0) {
+        LogService.warn("config", "The config provided for provisioned mjolnirs contains keys which are not used by the appservice.", unusedKeys);
+    }
+    const config = Config.util.extendDeep(
+        getDefaultConfig(),
+        allowedKeys.reduce((existingConfig: any, key: string) => {
+            return { ...existingConfig, [key]: configTemplate[key as keyof IConfig] }
+        }, {})
+    );
+
+    config.managementRoom = managementRoomId;
+    config.protectedRooms = [];
     return config;
 }
