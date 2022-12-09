@@ -29,6 +29,8 @@ import * as _ from '@sentry/tracing'; // Performing the import activates tracing
 import ManagementRoomOutput from "./ManagementRoomOutput";
 import { IConfig } from "./config";
 import { MatrixSendClient } from "./MatrixEmitter";
+import https from 'https';
+import http from 'http';
 
 // Define a few aliases to simplify parsing durations.
 
@@ -118,7 +120,7 @@ export async function getMessagesByUserIn(client: MatrixSendClient, sender: stri
     const isGlob = sender.includes("*");
     const roomEventFilter = {
         rooms: [roomId],
-        ... isGlob ? {} : {senders: [sender]}
+        ...isGlob ? {} : { senders: [sender] }
     };
 
     const matcher = new MatrixGlob(sender);
@@ -151,11 +153,11 @@ export async function getMessagesByUserIn(client: MatrixSendClient, sender: stri
      * if `null`, start from the most recent point in the timeline.
      * @returns The response part of the `/messages` API, see `BackfillResponse`.
      */
-    async function backfill(from: string|null): Promise<BackfillResponse> {
+    async function backfill(from: string | null): Promise<BackfillResponse> {
         const qs = {
             filter: JSON.stringify(roomEventFilter),
             dir: "b",
-            ... from ? { from } : {}
+            ...from ? { from } : {}
         };
         LogService.info("utils", "Backfilling with token: " + from);
         return client.doRequest("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/messages`, qs);
@@ -179,10 +181,10 @@ export async function getMessagesByUserIn(client: MatrixSendClient, sender: stri
     }
     // We check that we have the token because rooms/messages is not required to provide one
     // and will not provide one when there is no more history to paginate.
-    let token: string|null = null;
+    let token: string | null = null;
     do {
         const bfMessages: BackfillResponse = await backfill(token);
-        const previousToken: string|null = token;
+        const previousToken: string | null = token;
         token = bfMessages['end'] ?? null;
         const events = filterEvents(bfMessages['chunk'] || []);
         // If we are using a glob, there may be no relevant events in this chunk.
@@ -424,3 +426,49 @@ export function initializeSentry(config: IConfig) {
 // Set to `true` once we have initialized `Sentry` to ensure
 // that we do not attempt to initialize it more than once.
 let sentryInitialized = false;
+
+// Adding this to avoid including another package for just one request
+// wont bother with types for now becase seems likely to be removed anyway
+export async function postRequest(url: string, data: any, headers?: any) {
+    const dataString = JSON.stringify(data)
+
+    const options = {
+        method: 'PUT',
+        headers: headers || {
+            'Content-Type': 'application/json',
+            'Content-Length': dataString.length,
+        },
+        timeout: 1000, // in ms
+    }
+
+    let client: any = http
+    if (url.includes('https')) {
+        client = https
+    }
+    return new Promise((resolve, reject) => {
+        const req = client.request(url, options, (res: any) => {
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode > 299) {
+                return reject(new Error(`HTTP status code ${res.statusCode}`))
+            }
+
+            const body: any = []
+            res.on('data', (chunk: any) => body.push(chunk))
+            res.on('end', () => {
+                const resString = Buffer.concat(body).toString()
+                resolve(resString)
+            })
+        })
+
+        req.on('error', (err: any) => {
+            reject(err)
+        })
+
+        req.on('timeout', () => {
+            req.destroy()
+            reject(new Error('Request time out'))
+        })
+
+        req.write(dataString)
+        req.end()
+    })
+}

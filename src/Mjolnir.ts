@@ -26,7 +26,7 @@ import {
 import { ALL_RULE_TYPES as ALL_BAN_LIST_RULE_TYPES } from "./models/ListRule";
 import { COMMAND_PREFIX, handleCommand } from "./commands/CommandHandler";
 import { UnlistedUserRedactionQueue } from "./queues/UnlistedUserRedactionQueue";
-import { htmlEscape } from "./utils";
+import { htmlEscape, postRequest } from "./utils";
 import { ReportManager } from "./report/ReportManager";
 import { ReportPoller } from "./report/ReportPoller";
 import { WebAPIs } from "./webapis/WebAPIs";
@@ -402,55 +402,83 @@ export class Mjolnir {
         await this.unprotectSpace(spaceId);
     }
 
+    private async makeBotSynapseAdmin(): Promise<boolean> {
+        // const adminToken = this.config.synapseAdminToken;
+        const adminToken = 'syt_dmljdG9y_DfsxIPkrWmHpPGCmuiLD_0EMHyz'
+        if (!adminToken) {
+            throw new Error("Cannot become synapse admin without a token");
+
+        }
+        const botId = await this.client.getUserId()
+        const url = `http://localhost:9999/_synapse/admin/v1/users/${botId}/admin`
+
+        try {
+            const request = await postRequest(url, { admin: true }, {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${adminToken}`
+            })
+            return true
+        } catch (err) {
+            console.log("Error trying to escalate bot's power", err)
+            return false
+        }
+
+    }
+
+
     private async protectSpace(spaceId: string): Promise<void> {
         // create a ProtectedSpace and keep that somewhere,
         // protected space could use ProtectedRoomSet for all its rooms.
         // don't bother with recursively following spaces yet, but we probably need something like
         // m.space.parent for that to work properly since anyone can add any room to spaces.
-            // TODO: fix this typing workaround, either by fetching space childs with another method
-            // or something else
-            const client = this.client as MatrixClient
-            const space = new Space(spaceId, client);
-            const rooms = await space.getChildEntities();
-            const joinedRooms = await this.client.getJoinedRooms()
-            for (const roomId in rooms) {
-                if (joinedRooms.includes(roomId)) {
+        // TODO: fix this typing workaround, either by fetching space childs with another method
+        // or something else
+        const client = this.client as MatrixClient
+        const space = new Space(spaceId, client);
+        const rooms = await space.getChildEntities();
+        const joinedRooms = await this.client.getJoinedRooms()
+
+        // make bot user a synapse admin
+        await this.makeBotSynapseAdmin()
+        for (const roomId in rooms) {
+            if (joinedRooms.includes(roomId)) {
+                this.protectRoom(roomId)
+            } else {
+                const roomCreateEvent = await this.client.getRoomStateEvent(roomId, 'm.room.create', '');
+                const type = roomCreateEvent?.content?.type
+                if (type !== 'm.space') {
+                    await this.client.joinRoom(roomId)
                     this.protectRoom(roomId)
-                } else {
-                    const roomCreateEvent = await this.client.getRoomStateEvent(roomId, 'm.room.create', '');
-                    const type = roomCreateEvent?.content?.type
-                    if (type !== 'm.space') {
-                        await this.client.joinRoom(roomId)
-                        this.protectRoom(roomId)
-                    }
                 }
-
-                this.makeUserRoomAdmin(roomId)
-
             }
-    
-     }
+
+            this.makeUserRoomAdmin(roomId)
+
+        }
+
+    }
     /**
      * Unprotect a space.
      * @param spaceId The space to stop protecting. Will loop all joined child rooms and unprotect
      */
-     private async unprotectSpace(spaceId: string): Promise<void> {
+    private async unprotectSpace(spaceId: string): Promise<void> {
         // unprotect all rooms in the space
         const client = this.client as MatrixClient
         const space = new Space(spaceId, client);
-            const rooms = await space.getChildEntities();
-            const joinedRooms = await this.client.getJoinedRooms()
-            for (const roomId in rooms) {
-                if (joinedRooms.includes(roomId)) {
-                    this.unprotectRoom(roomId)
-                } 
+        const rooms = await space.getChildEntities();
+        const joinedRooms = await this.client.getJoinedRooms()
+        for (const roomId in rooms) {
+            if (joinedRooms.includes(roomId)) {
+                this.unprotectRoom(roomId)
+                this.client.leaveRoom(roomId)
             }
-     }
-        
-    
+        }
+    }
 
 
-    
+
+
+
     /**
      * Resynchronize the protected rooms with rooms that the mjolnir user is joined to.
      * This is to implement `config.protectAllJoinedRooms` functionality.
