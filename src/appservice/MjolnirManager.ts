@@ -11,7 +11,7 @@ import EventEmitter from "events";
 import { MatrixEmitter } from "../MatrixEmitter";
 
 const log = new Logger('MjolnirManager');
-
+const MAX_MJOLNIRS_PER_USER = 4
 /**
  * The MjolnirManager is responsible for:
  * * Provisioning new mjolnir instances.
@@ -116,7 +116,7 @@ export class MjolnirManager {
             throw new Error(`${requestingUserId} tried to provision a mjolnir when they do not have access ${access.outcome} ${access.rule?.reason ?? 'no reason specified'}`);
         }
         const provisionedMjolnirs = await this.dataStore.lookupByOwner(requestingUserId);
-        if (provisionedMjolnirs.length === 0) {
+        if (provisionedMjolnirs.length <= MAX_MJOLNIRS_PER_USER) {
             const mjolnirLocalPart = `mjolnir_${randomUUID()}`;
             const mjIntent = await this.makeMatrixIntent(mjolnirLocalPart);
 
