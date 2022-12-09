@@ -20,6 +20,7 @@ import {
     LogService,
     MembershipEvent,
     Permalinks,
+    MatrixClient
 } from "matrix-bot-sdk";
 
 import { ALL_RULE_TYPES as ALL_BAN_LIST_RULE_TYPES } from "./models/ListRule";
@@ -406,8 +407,10 @@ export class Mjolnir {
         // protected space could use ProtectedRoomSet for all its rooms.
         // don't bother with recursively following spaces yet, but we probably need something like
         // m.space.parent for that to work properly since anyone can add any room to spaces.
-        
-            const space = new Space(spaceId, this.client);
+            // TODO: fix this typing workaround, either by fetching space childs with another method
+            // or something else
+            const client = this.client as MatrixClient
+            const space = new Space(spaceId, client);
             const rooms = await space.getChildEntities();
             const joinedRooms = await this.client.getJoinedRooms()
             for (const roomId in rooms) {
@@ -433,7 +436,8 @@ export class Mjolnir {
      */
      private async unprotectSpace(spaceId: string): Promise<void> {
         // unprotect all rooms in the space
-        const space = new Space(spaceId, this.client);
+        const client = this.client as MatrixClient
+        const space = new Space(spaceId, client);
             const rooms = await space.getChildEntities();
             const joinedRooms = await this.client.getJoinedRooms()
             for (const roomId in rooms) {
